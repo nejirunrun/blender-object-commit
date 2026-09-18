@@ -1,0 +1,15 @@
+# python / blender
+__pycache__/
+*.pyc
+*.blend1
+dist/
+
+# test output
+tests/smoke.log
+
+# private working notes (not part of the published project)
+CLAUDE.md
+now.md
+handover_log.md
+docs/
+*.zip
