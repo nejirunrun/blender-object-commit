@@ -11,8 +11,8 @@ Blender のオブジェクト単位で git 風のコミットを行う拡張 (Ex
 
 ## インストール
 
-`object_commit` フォルダを zip にして、Preferences > Get Extensions >
-Install from Disk から入れてください。
+[Releases](https://github.com/nejirunrun/blender-object-commit/releases) から
+zip をダウンロードし、Preferences > Get Extensions > Install from Disk で入れてください。
 
 ## 使い方
 
@@ -55,8 +55,7 @@ blender -b --factory-startup --python tests/smoke.py
 ```
 
 コミット / チェックアウト / 閲覧 / スタッシュ / 検証 / 削除と、保存→再読込を
-ヘッドレスで一通り実行します。`tests/run.ps1` は Windows の Microsoft Store 版
-Blender 向けのラッパーです (ランチャーがコンソールから切り離されるため)。
+ヘッドレスで一通り実行し、成功すれば `OK` を表示します。
 
 ## ライセンス
 
