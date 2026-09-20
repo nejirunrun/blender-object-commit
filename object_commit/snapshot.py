@@ -10,14 +10,43 @@ import json
 
 import bpy
 
-META_VERSION = 2
+META_VERSION = 3
 
 _SKIP_RNA = {
-    "rna_type", "name", "type", "is_active", "show_expanded",
+    "rna_type", "name", "is_active", "show_expanded",
     "is_override_data", "persistent_uid", "execution_time", "is_valid",
     "error_location", "error_rotation", "active",
 }
 _SIMPLE = (bool, int, float, str)
+
+# Object-level properties captured by name (whitelist). Everything not listed
+# here, in capture_meta, or inside obj.data is *not* part of a snapshot; keep
+# README "含まれないもの" in sync when changing these.
+_OBJ_DISPLAY = (
+    "display_type", "show_wire", "show_in_front", "color", "show_name",
+    "show_axis", "show_texture_space", "show_bounds", "display_bounds_type",
+    "show_all_edges", "show_only_shape_key", "use_shape_key_edit_mode",
+    "active_material_index", "active_shape_key_index",
+    "empty_display_type", "empty_display_size", "empty_image_offset",
+    "empty_image_depth", "empty_image_side", "show_empty_image_orthographic",
+    "show_empty_image_perspective", "show_empty_image_only_axis_aligned",
+    "use_empty_image_alpha", "add_rest_position_attribute",
+    "use_grease_pencil_lights", "use_camera_lock_parent",
+)
+_OBJ_VISIBILITY = (
+    "hide_render", "hide_viewport", "hide_select", "pass_index",
+    "visible_camera", "visible_diffuse", "visible_glossy",
+    "visible_transmission", "visible_volume_scatter", "visible_shadow",
+    "is_holdout", "is_shadow_catcher",
+)
+_OBJ_INSTANCING = (
+    "instance_type", "instance_collection", "instance_faces_scale",
+    "use_instance_vertices_rotation", "use_instance_faces_scale",
+    "show_instancer_for_viewport", "show_instancer_for_render",
+)
+# Embedded settings structs. Physics that need an operator to exist (field,
+# rigid_body, soft_body, cloth, particle systems) are out of scope.
+_OBJ_STRUCTS = ("collision", "lineart")
 
 
 # ---------------------------------------------------------------- ID refs
@@ -253,6 +282,38 @@ def geometry_counts(data):
 
 
 # ---------------------------------------------------------------- capture
+def _capture_props(struct, names):
+    out = {}
+    for n in names:
+        try:
+            v = getattr(struct, n)
+        except AttributeError:
+            continue
+        if isinstance(v, bpy.types.ID):
+            out[n] = _id_ref(v)
+        elif v is None:
+            out[n] = {"__id": None}
+        else:
+            jv = _to_json_value(v)
+            if jv is not None:
+                out[n] = jv
+    return out
+
+
+def _apply_props(struct, props):
+    for k, raw in props.items():
+        if isinstance(raw, dict) and "__id" in raw:
+            v = _resolve_id(raw) if raw["__id"] else None
+            if v is None and raw["__id"]:
+                continue  # referenced datablock is gone: leave as is
+        else:
+            v = _from_json_value(raw)
+        try:
+            setattr(struct, k, v)
+        except Exception:
+            pass
+
+
 def capture_meta(obj):
     m = {"ver": META_VERSION, "obj_type": obj.type}
     m["matrix_basis"] = [list(r) for r in obj.matrix_basis]
@@ -270,12 +331,14 @@ def capture_meta(obj):
                    "material": s.material.name if s.material else None}
                   for s in obj.material_slots]
     m["vertex_groups"] = [vg.name for vg in obj.vertex_groups]
-    m["display"] = {
-        "display_type": obj.display_type,
-        "show_wire": obj.show_wire,
-        "show_in_front": obj.show_in_front,
-        "color": list(obj.color),
-    }
+    m["display"] = _capture_props(obj, _OBJ_DISPLAY)
+    m["visibility"] = _capture_props(obj, _OBJ_VISIBILITY)
+    m["instancing"] = _capture_props(obj, _OBJ_INSTANCING)
+    m["structs"] = {}
+    for name in _OBJ_STRUCTS:
+        st = getattr(obj, name, None)
+        if st is not None:
+            m["structs"][name] = _serialize_rna(st)
     m["custom"] = {k: v for k, v in _serialize_idprops(obj).items()
                    if k != "ocv"}
     m["counts"] = geometry_counts(obj.data)
@@ -297,7 +360,7 @@ def meta_loads(s):
 
 # ---------------------------------------------------------------- apply
 def apply_meta(obj, m, *, transform=True, stacks=True, slots=True,
-               custom=True, display=True):
+               custom=True, display=True, visibility=True):
     from mathutils import Matrix
     if transform:
         try:
@@ -339,12 +402,14 @@ def apply_meta(obj, m, *, transform=True, stacks=True, slots=True,
             except Exception:
                 pass
     if display:
-        d = m.get("display", {})
-        for k, v in d.items():
-            try:
-                setattr(obj, k, v)
-            except Exception:
-                pass
+        _apply_props(obj, m.get("display", {}))
+        _apply_props(obj, m.get("instancing", {}))
+        for name, props in m.get("structs", {}).items():
+            st = getattr(obj, name, None)
+            if st is not None:
+                _apply_rna(st, props)
+    if visibility:
+        _apply_props(obj, m.get("visibility", {}))
     if custom:
         _apply_idprops(obj, m.get("custom", {}))
 
@@ -424,4 +489,13 @@ def summarize_diff(old, new):
         lines.append("material slots changed")
     if old.get("custom") != new.get("custom"):
         lines.append("custom properties changed")
+    for key in ("display", "visibility", "instancing"):
+        a, b = old.get(key, {}), new.get(key, {})
+        changed = sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+        if changed:
+            lines.append(f"~ {key}: " + ", ".join(changed))
+    oa, na = old.get("structs", {}), new.get("structs", {})
+    for key in sorted(set(oa) | set(na)):
+        if oa.get(key) != na.get(key):
+            lines.append(f"~ {key} settings changed")
     return lines or ["no tracked changes"]

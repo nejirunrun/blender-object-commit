@@ -81,7 +81,7 @@ def _apply_commit(pv, c):
         else:
             return False
     meta = snap.meta_loads(c.meta)
-    snap.apply_meta(pv, meta, custom=False)
+    snap.apply_meta(pv, meta, custom=False, visibility=False)
     _state["cid"] = c.cid
     return True
 

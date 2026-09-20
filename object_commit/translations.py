@@ -71,6 +71,8 @@ _JA = {
     "transform changed": "位置・回転・拡縮が変化",
     "material slots changed": "マテリアルスロットが変化",
     "custom properties changed": "カスタムプロパティが変化",
+    "~ collision settings changed": "~ コリジョン設定が変化",
+    "~ lineart settings changed": "~ ラインアート設定が変化",
     "order changed": "順序が変化",
     # errors
     "linked / overridden object cannot be checked out":

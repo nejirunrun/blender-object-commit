@@ -169,6 +169,65 @@ def main():
     cube.modifiers.remove(cube.modifiers["Bev"])
     cube.modifiers.remove(cube.modifiers["Warp"])
 
+    # 6c. whitelisted object props: display / visibility / instancing / structs
+    coll = bpy.data.collections.new("inst")
+    cube.display_type = "WIRE"
+    cube.show_name = True
+    cube.hide_render = True
+    cube.pass_index = 7
+    cube.visible_shadow = False
+    cube.instance_type = "VERTS"
+    cube.modifiers.new("Col", "COLLISION")
+    cube.collision.damping = 0.4
+    cube.collision.use_culling = False
+    cube.lineart.usage = "EXCLUDE"
+    c5 = core.commit(ctx, cube, "props")
+    c5_cid = c5.cid
+    cube.display_type = "TEXTURED"
+    cube.show_name = False
+    cube.hide_render = False
+    cube.pass_index = 0
+    cube.visible_shadow = True
+    cube.instance_type = "NONE"
+    cube.collision.damping = 0.1
+    cube.lineart.usage = "INHERIT"
+    lines = core.diff_working(cube) if hasattr(core, "diff_working") else         object_commit.snapshot.summarize_diff(
+            object_commit.snapshot.meta_loads(c5.meta),
+            object_commit.snapshot.capture_meta(cube))
+    print("diff working:", lines)
+    assert any(l.startswith("~ display:") and "display_type" in l for l in lines)
+    assert any(l.startswith("~ visibility:") and "pass_index" in l for l in lines)
+    assert any(l.startswith("~ instancing:") for l in lines)
+    assert "~ collision settings changed" in lines
+    assert "~ lineart settings changed" in lines
+    core.checkout(ctx, cube, c5_cid)
+    assert cube.display_type == "WIRE" and cube.show_name
+    assert cube.hide_render and cube.pass_index == 7 and not cube.visible_shadow
+    assert cube.instance_type == "VERTS"
+    assert abs(cube.collision.damping - 0.4) < 1e-6 and not cube.collision.use_culling
+    assert cube.lineart.usage == "EXCLUDE"
+    _, c5 = core.find_commit(cube, c5_cid)
+    assert object_commit.snapshot.summarize_diff(
+        object_commit.snapshot.meta_loads(c5.meta),
+        object_commit.snapshot.capture_meta(cube)) == ["no tracked changes"]
+    cube.hide_render = False
+    cube.instance_type = "NONE"
+    cube.modifiers.remove(cube.modifiers["Col"])
+    # collection instancing only exists on empties
+    emp = bpy.data.objects.new("emp", None)
+    ctx.scene.collection.objects.link(emp)
+    emp.instance_type = "COLLECTION"
+    emp.instance_collection = coll
+    emp.empty_display_type = "CUBE"
+    emp.empty_display_size = 2.5
+    ce = core.commit(ctx, emp, "empty")
+    emp.instance_type = "NONE"
+    emp.instance_collection = None
+    emp.empty_display_type = "ARROWS"
+    core.checkout(ctx, emp, ce.cid)
+    assert emp.instance_type == "COLLECTION" and emp.instance_collection is coll
+    assert emp.empty_display_type == "CUBE" and abs(emp.empty_display_size - 2.5) < 1e-6
+
     # 7. verify + delete
     for c in cube.ocv.commits:
         ok, msg = core.verify(cube, c)
