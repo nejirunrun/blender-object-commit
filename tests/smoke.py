@@ -122,6 +122,53 @@ def main():
     assert abs(cube.location.x - 5.0) < 1e-6
     assert core.latest_stash(cube) is None or core.latest_stash(cube).is_auto
 
+    # 6b. embedded curve structs: bevel custom profile, warp falloff curve
+    bev = cube.modifiers.new("Bev", "BEVEL")
+    bev.profile_type = "CUSTOM"
+    prof = bev.custom_profile
+    prof.points.add(0.3, 0.7)
+    prof.points[1].handle_type_1 = "VECTOR"
+    prof.points[1].handle_type_2 = "VECTOR"
+    prof.update()
+    warp = cube.modifiers.new("Warp", "WARP")
+    warp.falloff_type = "CURVE"
+    cv = warp.falloff_curve.curves[0]
+    cv.points.new(0.25, 0.9)
+    cv.points[1].handle_type = "VECTOR"
+    warp.falloff_curve.update()
+    c3 = core.commit(ctx, cube, "curves")
+    c3_cid = c3.cid
+    prof.points.remove(prof.points[1])
+    prof.points[0].location = (0.9, 0.1)
+    prof.update()
+    cv.points.remove(cv.points[1])
+    warp.falloff_curve.update()
+    assert len(prof.points) == 2 and len(cv.points) == 2
+    core.checkout(ctx, cube, c3_cid)
+    bev = cube.modifiers["Bev"]
+    prof = bev.custom_profile
+    assert bev.profile_type == "CUSTOM"
+    assert len(prof.points) == 3, len(prof.points)
+    assert all(abs(a - b) < 1e-6 for a, b in zip(prof.points[1].location, (0.3, 0.7)))
+    assert prof.points[1].handle_type_1 == "VECTOR"
+    assert all(abs(a - b) < 1e-6 for a, b in zip(prof.points[0].location, (1.0, 0.0)))
+    cv = cube.modifiers["Warp"].falloff_curve.curves[0]
+    assert len(cv.points) == 3, len(cv.points)
+    assert all(abs(a - b) < 1e-6 for a, b in zip(cv.points[1].location, (0.25, 0.9)))
+    assert cv.points[1].handle_type == "VECTOR"
+    # curve-only edit shows up in the summary diff
+    prof.points[1].location = (0.4, 0.6)
+    prof.update()
+    c4 = core.commit(ctx, cube, "curve tweak")
+    _, c3 = core.find_commit(cube, c3_cid)  # re-fetch: items moved
+    lines = object_commit.snapshot.summarize_diff(
+        object_commit.snapshot.meta_loads(c3.meta),
+        object_commit.snapshot.meta_loads(c4.meta))
+    print("diff c3->c4:", lines)
+    assert any("custom_profile" in l for l in lines)
+    cube.modifiers.remove(cube.modifiers["Bev"])
+    cube.modifiers.remove(cube.modifiers["Warp"])
+
     # 7. verify + delete
     for c in cube.ocv.commits:
         ok, msg = core.verify(cube, c)

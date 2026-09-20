@@ -10,7 +10,7 @@ import json
 
 import bpy
 
-META_VERSION = 1
+META_VERSION = 2
 
 _SKIP_RNA = {
     "rna_type", "name", "type", "is_active", "show_expanded",
@@ -64,14 +64,22 @@ def _serialize_rna(struct):
     out = {}
     for p in struct.bl_rna.properties:
         ident = p.identifier
-        if ident in _SKIP_RNA or p.is_readonly or p.type == "COLLECTION":
+        if ident in _SKIP_RNA or p.type == "COLLECTION":
+            continue
+        if p.is_readonly and p.type != "POINTER":
             continue
         try:
             v = getattr(struct, ident)
         except Exception:
             continue
         if p.type == "POINTER":
-            if isinstance(v, bpy.types.ID):
+            # Embedded curve structs are read-only pointers whose contents
+            # are writable (Bevel custom_profile, Warp/Hook falloff_curve).
+            if isinstance(v, bpy.types.CurveProfile):
+                out[ident] = {"__curve_profile": _serialize_profile(v)}
+            elif isinstance(v, bpy.types.CurveMapping):
+                out[ident] = {"__curve_mapping": _serialize_mapping(v)}
+            elif isinstance(v, bpy.types.ID) and not p.is_readonly:
                 out[ident] = _id_ref(v)
             continue
         jv = _to_json_value(v)
@@ -105,8 +113,21 @@ def _apply_rna(struct, props):
     keys = sorted(props.keys(),
                   key=lambda k: 0 if isinstance(props[k], dict) else 1)
     for k in keys:
-        v = _from_json_value(props[k])
-        if isinstance(props[k], dict) and "__id" in props[k] and v is None:
+        raw = props[k]
+        if isinstance(raw, dict) and ("__curve_profile" in raw
+                                      or "__curve_mapping" in raw):
+            # Embedded (non-ID) struct: the pointer is read-only, fill it in.
+            try:
+                target = getattr(struct, k)
+                if "__curve_profile" in raw:
+                    _apply_profile(target, raw["__curve_profile"])
+                else:
+                    _apply_mapping(target, raw["__curve_mapping"])
+            except Exception:
+                pass
+            continue
+        v = _from_json_value(raw)
+        if isinstance(raw, dict) and "__id" in raw and v is None:
             continue
         try:
             setattr(struct, k, v)
@@ -123,6 +144,57 @@ def _apply_idprops(struct, props):
             struct[k] = val
         except Exception:
             pass
+
+
+# ------------------------------------------------- embedded curve structs
+# CurveProfile (Bevel custom profile) and CurveMapping (falloff curves) are
+# not IDs; they live inside the modifier and only their contents are writable.
+def _resize_points(points, n, add):
+    while len(points) > max(n, 2):
+        points.remove(points[1])
+    while len(points) < n:
+        add(points)
+
+
+def _serialize_profile(prof):
+    d = _serialize_rna(prof)
+    d["points"] = [[*pt.location, pt.handle_type_1, pt.handle_type_2]
+                   for pt in prof.points]
+    return d
+
+
+def _apply_profile(prof, d):
+    pts = d.get("points", [])
+    _apply_rna(prof, {k: v for k, v in d.items() if k != "points"})
+    _resize_points(prof.points, len(pts), lambda c: c.add(0.5, 0.5))
+    # The handle_type setters act on every *selected* point, so select
+    # exactly one point at a time.
+    for pt in prof.points:
+        pt.select = False
+    for pt, (x, y, h1, h2) in zip(prof.points, pts):
+        pt.location = (x, y)
+        pt.select = True
+        pt.handle_type_1 = h1
+        pt.handle_type_2 = h2
+        pt.select = False
+    prof.update()
+
+
+def _serialize_mapping(cm):
+    d = _serialize_rna(cm)
+    d["curves"] = [[[*pt.location, pt.handle_type] for pt in c.points]
+                   for c in cm.curves]
+    return d
+
+
+def _apply_mapping(cm, d):
+    _apply_rna(cm, {k: v for k, v in d.items() if k != "curves"})
+    for curve, pts in zip(cm.curves, d.get("curves", [])):
+        _resize_points(curve.points, len(pts), lambda c: c.new(0.5, 0.5))
+        for pt, (x, y, h) in zip(curve.points, pts):
+            pt.location = (x, y)
+            pt.handle_type = h
+    cm.update()
 
 
 def _serialize_stack(stack):
